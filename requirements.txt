@@ -1,0 +1,5 @@
+@"
+aiohttp==3.14.3
+aiodns==4.0.4
+beautifulsoup4==4.15.0
+"@ | Set-Content .\requirements.txt
