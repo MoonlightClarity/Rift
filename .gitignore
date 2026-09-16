@@ -1,12 +1,20 @@
 # Python
 __pycache__/
 *.py[cod]
+.venv/
+venv/
 
-# PyInstaller
+# PyInstaller / packaging
 build/
 dist/
 *.spec
 
-# Runtime files
+# Runtime inputs / outputs
+today.txt
+org.txt
+*.zone
 output.txt
+*_domains.txt
+*.tsv
 diagnostic/
+diagnostic.txt

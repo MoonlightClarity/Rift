@@ -1,130 +1,215 @@
-# RIFT
+# Rift
 
-Rift is a lightweight asynchronous web crawler for checking large lists of URLs and generating page metadata.
+Rift is a local asynchronous utility for enriching large domain lists with live web metadata.
 
-It uses Google DNS to resolve domains, makes HTTP/HTTPS requests, and records successfully reachable pages that return a 2xx status code and contain a page title.
+> This is my first project. I am still open-sourcing it in the hope that someone can use it. It will not likely be updated much, if at all.
 
-# RIFT FEATURES
+Its primary workflow is deliberately narrow:
 
-* Asynchronous URL checking
-* Google DNS resolution using 8.8.8.8 and 8.8.4.4
-* IPv4 connectivity checking
-* HTTP and HTTPS support
-* No redirect following
-* SSL certificate verification disabled
-* Page title extraction
-* Concurrent processing
-* Live progress and diagnostic reporting
-* Windows GUI
-* Separate DNS zone-file cleaner
+```text
+domain list -> DNS/web probe -> structured TSV metadata
+```
 
-# RIFT
+Rift was originally built around newly registered domain data such as the SMET NRD `today.txt` feed. It can also ingest ICANN-style DNS zone exports after conversion with the included compatibility cleaner.
 
-Rift reads URLs from a user-selected input file, checks each URL, and writes successful results to a user-selected output file.
+## What Rift does
 
-The default input filename is today.txt, but any text file containing URLs can be selected through the GUI.
+For each input domain or URL, Rift:
 
-A successful result is written in the following format:
+1. prefers HTTPS;
+2. resolves and connects asynchronously;
+3. follows a bounded redirect chain;
+4. reads only a bounded amount of the response body;
+5. extracts passive HTML metadata from the same bounded response body: title, meta description, Open Graph title/description, and the first H1;
+6. falls back to HTTP only when HTTPS fails to produce a successful page;
+7. records the original input together with the final live URL, status, and whatever passive metadata was available.
 
-https://example.com    Example Domain
+The primary output is UTF-8 tab-separated text with a header. Rift writes a UTF-8 BOM for better compatibility with Windows spreadsheet and shell tooling:
 
-The URL and page title are separated by a tab character.
+```text
+input	final_url	status	title	description	og_title	og_description	h1
+example.com	https://example.com/	200	Example Domain	...	...	...	Example Domain
+```
 
-Only responses with HTTP status codes from 200 through 299 and a non-empty page title are written to the output file.
+Preserving the original input is intentional. A newly registered domain may redirect to another hostname, and an enrichment result should remain traceable to the domain that was scanned.
 
-# INPUT
+Reachable 2xx pages are preserved even when they expose no title or other passive metadata. Failures and unusual responses are written to the diagnostic file.
 
-The input file should contain one URL per line.
+## Input
 
-Example:
+### SMET / plain domain lists
 
-https://example.com
-https://www.example.org
-http://example.net
+SMET-style files are directly usable. They contain one domain per line:
 
-The input and output paths can be selected through the Rift GUI.
+```text
+example.com
+example.org
+example.net
+```
 
-# OUTPUT
+Full HTTP/HTTPS URLs are also accepted. Blank lines, comments beginning with `#`, a UTF-8 BOM, and adjacent duplicate lines are handled by the streaming loader.
 
-Successful pages are written to the selected output file.
+The SMET NRD daily feed is published at:
 
-Connection and crawler diagnostics are written separately to the selected diagnostic location.
+```text
+https://smet.cz/nrd/data/today.txt
+```
 
-# CLEANER
+Rift does not depend on that URL specifically; any compatible domain-per-line text file can be supplied.
 
-Cleaner is a separate utility for processing DNS zone files.
+### ICANN zone exports
 
-It extracts valid hostnames, removes duplicates and DNS service/meta records, and produces normalized HTTPS URLs.
+ICANN-style DNS zone exports use a different input shape. Convert them first with:
 
-Example output:
+```text
+python Icann_file_compatibility_cleaner.py input.zone cleaned.txt
+```
 
-https://example.com
-https://www.example.com
-https://mail.example.com
+The compatibility converter streams the zone file, detects the zone apex from SOA, keeps delegated-domain NS owners, collapses repeated NS rows, and writes a Rift-compatible bare-domain list. DNSSEC records, glue A/AAAA records, the zone apex, and other non-delegation owners are skipped. It assumes records are grouped by owner name, as in the ICANN/CZDS TLD-zone exports it was built for; that assumption lets it process very large zones without holding millions of names in memory.
 
-Cleaner has its own Windows GUI with selectable input and output files.
+It is intentionally an ICANN/CZDS TLD-zone compatibility converter, not a general-purpose BIND master-file parser.
 
-# RUNNING FROM SOURCE
+## Installation
 
 Python 3.13 or newer is recommended.
 
-Install the required dependencies with:
-
+```text
 pip install -r requirements.txt
+```
 
-Run Rift with:
+Runtime dependencies are limited to `aiohttp` and `aiodns`.
 
-python gui.py
+## Running Rift
 
-Run Cleaner with:
+Basic use:
 
-python cleaner_gui.py
+```text
+python rift.py today.txt
+```
 
-# WINDOWS EXECUTABLES
+Explicit paths:
 
-Prebuilt Windows executables can be distributed separately from the source code.
+```text
+python rift.py today.txt -o results.tsv -d diagnostic.txt
+```
 
-The distribution includes:
+Useful runtime controls:
 
-Rift
-Cleaner
+```text
+python rift.py today.txt \
+    -o results.tsv \
+    -d diagnostic.txt \
+    --concurrency 500 \
+    --timeout 8 \
+    --max-redirects 5
+```
 
-Both applications are standalone Windows builds and do not require Python to be installed.
+On Windows PowerShell, the same command can be entered on one line.
 
-# CONFIGURATION
+Available command-line options can always be inspected with:
 
-Crawler settings can be adjusted through the Rift GUI.
+```text
+python rift.py --help
+```
 
-Configurable settings include:
+Important options include:
 
-Input file
-Output file
-Diagnostic location
-DNS servers
-DNS timeout
-Concurrency
-Request timeout
-Connection timeout
-Socket timeouts
+- `-o`, `--output`: TSV result file;
+- `-d`, `--diagnostic`: diagnostic log;
+- `-c`, `--concurrency`: concurrent workers;
+- `--dns`: one or more DNS resolver addresses;
+- `--timeout`: total request timeout;
+- `--max-redirects`: redirect limit;
+- `--no-http-fallback`: disable HTTPS-to-HTTP fallback.
 
-The default DNS servers are:
+`config.py` supplies defaults for advanced behavior. Command-line values are copied into a per-run configuration snapshot; running a scan does not mutate global configuration state.
 
-8.8.8.8
-8.8.4.4
+## Architecture
 
-# PROJECT FILES
+The network enrichment pipeline lives in `rift.py`.
 
-gui.py
-scraper.py
-cleaner.py
-cleaner_gui.py
+A scan uses one shared `aiohttp` session and connector. A fixed worker pool continuously consumes the input list, so a handful of slow hosts do not block an entire request batch.
+
+The enrichment pipeline provides:
+
+- asynchronous concurrent requests;
+- configurable DNS resolvers;
+- IPv4 probing;
+- shared connection and DNS caching;
+- HTTPS-first probing with optional HTTP fallback;
+- bounded redirect following;
+- bounded response reads;
+- basic HTTP and HTML charset handling;
+- passive extraction of title, meta description, Open Graph title/description, and first H1;
+- streaming input with bounded memory;
+- batched output and diagnostics;
+- periodic progress statistics;
+- cancellation through `Ctrl+C`.
+
+## Network behavior
+
+Rift is designed for broad lightweight metadata collection from heterogeneous newly registered domains, not browser-grade rendering.
+
+Important limitations and choices:
+
+- JavaScript is not executed.
+- Only returned HTML is inspected.
+- TLS certificate verification is disabled so certificate problems do not automatically exclude a host from metadata collection.
+- IPv4 is used.
+- A page must return a configured successful HTTP status to appear in primary output; metadata fields may be blank.
+- Redirects may move requests to another hostname; the final URL is recorded while the original input is retained.
+- Response reads are bounded, so Rift does not download entire large pages simply to obtain lightweight metadata.
+
+## Diagnostics
+
+Failures are written separately from successful enrichment results. Diagnostic entries distinguish common categories such as:
+
+- DNS failures;
+- connection/TLS failures;
+- timeouts;
+- non-successful HTTP statuses;
+- redirect problems;
+- successful pages with no passive metadata;
+- unexpected internal errors.
+
+Successful requests are not logged to diagnostics by default, keeping large runs substantially smaller.
+
+## Tests
+
+Run the regression suite with:
+
+```text
+python -m unittest discover -s tests -v
+```
+
+The tests cover URL normalization, passive metadata extraction, UTF-8 BOM handling, adjacent duplicate input removal, ICANN/CZDS delegation conversion, HTTPS-to-HTTP fallback, redirect loops, no-metadata live pages, and the structured output schema.
+
+## Project files
+
+```text
+rift.py
+    Main CLI and asynchronous enrichment pipeline.
+
 config.py
+    Runtime defaults and Config dataclass.
+
+Icann_file_compatibility_cleaner.py
+    ICANN-style zone-export compatibility converter.
+
+tests/test_rift.py
+    Standard-library regression tests.
+
 requirements.txt
-README.txt
-.gitignore
+    Python runtime dependencies.
 
-Generated files, build directories, runtime output, and diagnostic data are excluded from the source repository.
+LICENSE.txt
+    MIT license.
+```
 
-# LICENSE
+## Scope
 
-This project is distributed under the MIT License.
+Rift is not a general web crawler, search engine, browser automation framework, vulnerability scanner, or complete DNS zone parser. Its job is to turn large domain/URL lists into traceable lightweight web metadata.
+
+## License
+
+Rift is distributed under the MIT License.
